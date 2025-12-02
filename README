@@ -1,0 +1,10 @@
+# Install
+To run you will need to install the following 
+    pip install qiskit
+    pip install qiskit-aer
+    pip install pycryptodome
+    pip install matplotlib
+    pip install numpy
+
+To run the program use 
+    python .\ShorsAlgorithm.py
