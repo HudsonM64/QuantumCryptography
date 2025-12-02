@@ -9,7 +9,7 @@ import timeit
 import matplotlib.pyplot as plt
 
 
-# Helper functions
+# HELPER FUNCTIONS
 def mod_inverse(e, phi):
     """
     Returns d such that (d*e) % phi == 1
@@ -39,7 +39,7 @@ def num_to_text(num):
         return f"[Error: {num}]"
 
 
-# IMPROVED SHOR SIMULATION
+# SHOR SIMULATION
 def find_period(a, N):
     """Find the period r where a^r ≡ 1 (mod N)"""
     r = 1
@@ -92,13 +92,12 @@ print("\n================ RSA (CLASSICAL) ================")
 
 start_keygen = time.time()
 
-# Larger primes for demo to handle the message
-# HELLO = 310400273487 in numeric form, so we need n > this value
-p = 1000003  # ~1 million
-q = 1000033  # ~1 million
-n = p * q    # ~1 trillion (much larger than HELLO)
+# HELLO = 310400273487 in numeric form
+p = 1000003  
+q = 1000033  
+n = p * q    
 phi = (p - 1) * (q - 1)
-e = 65537  # Common RSA exponent
+e = 65537  
 while gcd(e, phi) != 1:
     e += 2
 d = mod_inverse(e, phi)
@@ -106,7 +105,6 @@ d = mod_inverse(e, phi)
 end_keygen = time.time()
 keygen_time = end_keygen - start_keygen
 
-# Message (make sure it's smaller than n)
 message = "HELLO"
 m = text_to_num(message)
 
@@ -144,11 +142,11 @@ def format_time(seconds):
     """Format time in the most appropriate unit"""
     if seconds == 0:
         return "< 0.001 μs"
-    elif seconds < 1e-6:  # Less than 1 microsecond
+    elif seconds < 1e-6:  
         return f"{seconds*1e9:.3f} ns"
-    elif seconds < 1e-3:  # Less than 1 millisecond
+    elif seconds < 1e-3:  
         return f"{seconds*1e6:.3f} μs"
-    elif seconds < 1:  # Less than 1 second
+    elif seconds < 1:  
         return f"{seconds*1e3:.3f} ms"
     else:
         return f"{seconds:.3f} s"
@@ -162,7 +160,7 @@ print(f"RSA Decryption time:     {format_time(decrypt_time)}")
 print("\n============ SHOR'S ALGORITHM (ATTACK) ============")
 
 # Use a smaller n for the attack demo
-small_n = 15  # 3 × 5
+small_n = 15  
 start_shor = time.perf_counter()
 
 print(f"Attempting to factor n = {small_n}")
@@ -260,7 +258,7 @@ for n_val in n_values:
     m_val = 65  # ASCII 'A'
     
     # Time RSA multiple times for better measurement
-    rsa_iterations = 10000  # Increased iterations for better precision
+    rsa_iterations = 10000  
     start_rsa = time.time()
     for _ in range(rsa_iterations):
         c_val = pow(m_val, e_val, n_val)
@@ -274,8 +272,8 @@ for n_val in n_values:
     end_shor = time.time()
     shor_time = end_shor - start_shor
     
-    rsa_times.append(avg_rsa_time * 1000000)  # Convert to microseconds
-    shor_times.append(shor_time * 1000)  # Convert to milliseconds
+    rsa_times.append(avg_rsa_time * 1000000)  
+    shor_times.append(shor_time * 1000)  
     successful_n.append(n_val)
     print(f"✓ RSA: {avg_rsa_time*1000000:.3f}μs, Shor: {shor_time*1000:.3f}ms")
 
