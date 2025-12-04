@@ -26,6 +26,50 @@ def mod_inverse(e, phi):
         return x % phi
 
 
+# RSA ENCRYPTION/DECRYPTION
+def generate_rsa_keys(p, q):
+    """Generate RSA public and private keys from primes p and q"""
+    N = p * q
+    phi = (p - 1) * (q - 1)
+    
+    # Choose e (commonly 65537, but we'll use smaller values for small N)
+    e = 65537
+    if e >= phi:
+        e = 3
+        while gcd(e, phi) != 1:
+            e += 2
+    
+    d = mod_inverse(e, phi)
+    
+    return (e, N), (d, N)  # public_key, private_key
+
+
+def rsa_encrypt(message, public_key):
+    """Encrypt a message using RSA public key"""
+    e, N = public_key
+    return pow(message, e, N)
+
+
+def rsa_decrypt(ciphertext, private_key):
+    """Decrypt a ciphertext using RSA private key"""
+    d, N = private_key
+    return pow(ciphertext, d, N)
+
+
+def rsa_attack_by_factoring(N):
+    """Attack RSA by factoring N to recover the private key
+    """
+    if N % 2 == 0:
+        p = 2
+        q = N // 2
+        return p, q
+    
+    for i in range(3, int(N**0.5) + 1, 2):
+        if N % i == 0:
+            return i, N // i
+    return None
+
+
 # CLASSICAL FACTORING ALGORITHMS
 
 def trial_division(N):
@@ -36,30 +80,6 @@ def trial_division(N):
     for i in range(3, int(N**0.5) + 1, 2):
         if N % i == 0:
             return i, N // i
-    return None
-
-
-def pollards_rho(N, max_iterations=10000):
-    """Pollard's Rho - faster classical factoring method"""
-    if N % 2 == 0:
-        return 2, N // 2
-    
-    x = randint(2, N - 1)
-    y = x
-    d = 1
-    
-    def f(x):
-        return (x * x + 1) % N
-    
-    iterations = 0
-    while d == 1 and iterations < max_iterations:
-        x = f(x)
-        y = f(f(y))
-        d = gcd(abs(x - y), N)
-        iterations += 1
-    
-    if d != N and d != 1:
-        return d, N // d
     return None
 
 
@@ -261,10 +281,10 @@ for N in test_values:
     trial_result = trial_division(N)
     trial_time = time.perf_counter() - start
     
-    # Pollard's Rho (better classical)
+    # RSA Attack by factoring
     start = time.perf_counter()
-    pollard_result = pollards_rho(N)
-    pollard_time = time.perf_counter() - start
+    rsa_result = rsa_attack_by_factoring(N)
+    rsa_time = time.perf_counter() - start
     
     # Classical Shor method
     start = time.perf_counter()
@@ -278,7 +298,7 @@ for N in test_values:
         quantum_time = time.perf_counter() - start
         
         print(f"  Trial Division:     {trial_time*1000:.3f} ms  → {trial_result}")
-        print(f"  Pollard's Rho:      {pollard_time*1000:.3f} ms  → {pollard_result}")
+        print(f"  RSA Attack:         {rsa_time*1000:.3f} ms  → {rsa_result}")
         print(f"  Classical Shor:     {classical_shor_time*1000:.3f} ms  → {classical_shor_result}")
         print(f"  🔮 QUANTUM Shor:    {quantum_time*1000:.3f} ms  → {quantum_result}")
         
@@ -286,7 +306,7 @@ for N in test_values:
             print(f"\n  ⚡ Quantum speedup vs classical Shor: {classical_shor_time/quantum_time:.2f}x")
     else:
         print(f"  Trial Division:     {trial_time*1000:.3f} ms  → {trial_result}")
-        print(f"  Pollard's Rho:      {pollard_time*1000:.3f} ms  → {pollard_result}")
+        print(f"  RSA Attack:         {rsa_time*1000:.3f} ms  → {rsa_result}")
         print(f"  Classical Shor:     {classical_shor_time*1000:.3f} ms  → {classical_shor_result}")
         print(f"  🔮 Quantum Shor:    N/A (only implemented for N=15)")
         quantum_time = None
@@ -295,7 +315,7 @@ for N in test_values:
     results.append({
         'N': N,
         'trial_time': trial_time * 1000,
-        'pollard_time': pollard_time * 1000,
+        'rsa_time': rsa_time * 1000,
         'classical_shor_time': classical_shor_time * 1000,
         'quantum_time': quantum_time * 1000 if quantum_time else None
     })
@@ -315,13 +335,8 @@ print("-" * 70)
 
 for bits in key_sizes:
     # These are rough estimates based on complexity classes
-    # Trial Division: O(sqrt(N)) ≈ O(2^(n/2))
-    # Use log to avoid overflow: 2^(bits/2) = exp(bits/2 * ln(2))
     trial_log = (bits / 2) * np.log(2) - np.log(1e15)
     trial_est = np.exp(trial_log) if trial_log < 700 else float('inf')
-    
-    # General Number Field Sieve (best classical): O(exp((64/9)^(1/3) * (n*ln(2))^(1/3) * (ln(n*ln(2)))^(2/3)))
-    # Simplified to sub-exponential but super-polynomial
     gnfs_exponent = 1.923 * (bits ** (1/3)) * ((np.log(bits)) ** (2/3)) - np.log(1e9)
     gnfs_est = np.exp(gnfs_exponent) if gnfs_exponent < 700 else float('inf')
     
@@ -359,11 +374,11 @@ gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
 ax1 = fig.add_subplot(gs[0, :])
 n_values = [r['N'] for r in results]
 trial_times = [r['trial_time'] for r in results]
-pollard_times = [r['pollard_time'] for r in results]
+rsa_times = [r['rsa_time'] for r in results]
 classical_shor_times = [r['classical_shor_time'] for r in results]
 
 ax1.plot(n_values, trial_times, 'o-', label='Trial Division', linewidth=2, markersize=8, color='red')
-ax1.plot(n_values, pollard_times, 's-', label="Pollard's Rho", linewidth=2, markersize=8, color='orange')
+ax1.plot(n_values, rsa_times, 's-', label="RSA Attack", linewidth=2, markersize=8, color='orange')
 ax1.plot(n_values, classical_shor_times, '^-', label='Classical Shor Method', linewidth=2, markersize=8, color='blue')
 
 # Add quantum point for N=15
