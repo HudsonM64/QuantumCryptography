@@ -1,20 +1,17 @@
+from qiskit import QuantumCircuit, transpile
 from qiskit_aer import Aer
-from qiskit import QuantumCircuit
-from math import gcd
+from qiskit.circuit.library import QFT
+from math import gcd, pi
 from random import randint
-from Crypto.Util.number import inverse, long_to_bytes, bytes_to_long
+from fractions import Fraction
 import numpy as np
 import time
-import timeit
 import matplotlib.pyplot as plt
 
 
 # HELPER FUNCTIONS
 def mod_inverse(e, phi):
-    """
-    Returns d such that (d*e) % phi == 1
-    Uses extended Euclidean algorithm
-    """
+    """Returns d such that (d*e) % phi == 1"""
     def egcd(a, b):
         if a == 0:
             return b, 0, 1
@@ -24,24 +21,50 @@ def mod_inverse(e, phi):
 
     g, x, _ = egcd(e, phi)
     if g != 1:
-        return None  # no inverse
+        return None
     else:
         return x % phi
+
+
+# CLASSICAL FACTORING ALGORITHMS
+
+def trial_division(N):
+    """Trial division - simplest classical factoring method"""
+    if N % 2 == 0:
+        return 2, N // 2
     
-def text_to_num(text):
-    return int.from_bytes(text.encode(), 'big')
-
-def num_to_text(num):
-    try:
-        byte_length = (num.bit_length() + 7) // 8
-        return num.to_bytes(byte_length, 'big').decode('utf-8', errors='ignore')
-    except Exception as e:
-        return f"[Error: {num}]"
+    for i in range(3, int(N**0.5) + 1, 2):
+        if N % i == 0:
+            return i, N // i
+    return None
 
 
-# SHOR SIMULATION
-def find_period(a, N):
-    """Find the period r where a^r ≡ 1 (mod N)"""
+def pollards_rho(N, max_iterations=10000):
+    """Pollard's Rho - faster classical factoring method"""
+    if N % 2 == 0:
+        return 2, N // 2
+    
+    x = randint(2, N - 1)
+    y = x
+    d = 1
+    
+    def f(x):
+        return (x * x + 1) % N
+    
+    iterations = 0
+    while d == 1 and iterations < max_iterations:
+        x = f(x)
+        y = f(f(y))
+        d = gcd(abs(x - y), N)
+        iterations += 1
+    
+    if d != N and d != 1:
+        return d, N // d
+    return None
+
+
+def classical_period_finding(a, N):
+    """Classical period finding - used in classical Shor simulation"""
     r = 1
     current = a % N
     while current != 1 and r < N:
@@ -50,333 +73,373 @@ def find_period(a, N):
     return r if current == 1 else None
 
 
-def shor_classical_sim(N):
-    """Classical simulation of Shor's algorithm"""
-    # Check if N is even
+def classical_shor_method(N):
+    """Classical implementation of Shor's approach (without quantum speedup)
+    
+    This uses the SAME mathematical approach as quantum Shor's algorithm,
+    but WITHOUT the quantum speedup for period finding. This shows how
+    the algorithm works but loses the exponential advantage.
+    """
+    # STEP 1: Check if N is even (trivial case)
     if N % 2 == 0:
-        return 2, N//2
+        return 2, N // 2
 
-    # Try multiple random values of a
+    # STEP 2: Try multiple random values of 'a' (base for modular exponentiation)
     for attempt in range(20):
-        a = randint(2, N-1)
+        a = randint(2, N - 1)
         
-        # Check if gcd(a, N) > 1
+        # STEP 3: Check if gcd(a, N) is already a factor
         g = gcd(a, N)
         if g != 1:
-            return g, N//g
+            return g, N // g
         
-        # Find the period r
-        r = find_period(a, N)
+        # STEP 4: Find the period 'r' where a^r ≡ 1 (mod N)
+        # THIS IS THE CRITICAL STEP where quantum provides speedup!
+        # Classical: O(N) time - tries every power until we cycle back to 1
+        # Quantum: O(log(N)^3) time - uses quantum Fourier transform
+        r = classical_period_finding(a, N)
         
+        # STEP 5: Check if period is valid (must be even and not None)
         if r is None or r % 2 != 0:
             continue
         
-        # Calculate potential factors
-        x = pow(a, r//2, N)
+        # STEP 6: Calculate x = a^(r/2) mod N
+        x = pow(a, r // 2, N)
         
-        if x == N - 1:  # x ≡ -1 (mod N)
+        # STEP 7: Check for the trivial case x ≡ -1 (mod N)
+        if x == N - 1: 
             continue
         
-        p = gcd(x - 1, N)
-        q = gcd(x + 1, N)
+        # STEP 8: Extract potential factors using GCD
+        p = gcd(x - 1, N) 
+        q = gcd(x + 1, N)  
         
-        # Validate factors
+        # STEP 9: Validate that we found real factors
         if p > 1 and q > 1 and p != N and q != N and p * q == N:
             return p, q
+    
+    # If all 20 attempts failed, return None
+    return None
+
+
+# QUANTUM SHOR'S ALGORITHM
+
+def c_amod15(a, power):
+    """Controlled multiplication by a mod 15"""
+    if a not in [2, 4, 7, 8, 11, 13]:
+        raise ValueError("'a' must be 2,4,7,8,11 or 13")
+    U = QuantumCircuit(4)
+    for _ in range(power):
+        if a in [2, 13]:
+            U.swap(0, 1)
+            U.swap(1, 2)
+            U.swap(2, 3)
+        if a in [7, 8]:
+            U.swap(2, 3)
+            U.swap(1, 2)
+            U.swap(0, 1)
+        if a in [4, 11]:
+            U.swap(1, 3)
+            U.swap(0, 2)
+        if a in [7, 11, 13]:
+            for q in range(4):
+                U.x(q)
+    U = U.to_gate()
+    U.name = f"{a}^{power} mod 15"
+    c_U = U.control()
+    return c_U
+
+
+def qft_dagger(n):
+    """n-qubit inverse QFT"""
+    qc = QuantumCircuit(n)
+    for qubit in range(n // 2):
+        qc.swap(qubit, n - qubit - 1)
+    for j in range(n):
+        for m in range(j):
+            qc.cp(-pi / float(2 ** (j - m)), m, j)
+        qc.h(j)
+    qc.name = "QFT†"
+    return qc
+
+
+def quantum_period_finding(a, N, n_count=8):
+    """Quantum period finding using Qiskit"""
+    qc = QuantumCircuit(n_count + 4, n_count)
+    
+    for q in range(n_count):
+        qc.h(q)
+    
+    qc.x(n_count)
+    
+    for q in range(n_count):
+        qc.append(c_amod15(a, 2 ** q), [q] + [i + n_count for i in range(4)])
+    
+    qc.append(qft_dagger(n_count), range(n_count))
+    qc.measure(range(n_count), range(n_count))
+    
+    backend = Aer.get_backend('aer_simulator')
+    job = backend.run(transpile(qc, backend), shots=1024, memory=True)
+    result = job.result()
+    counts = result.get_counts()
+    
+    return counts
+
+
+def quantum_shor(N):
+    """Quantum Shor's algorithm (only works for N=15 in this implementation)"""
+    if N != 15:
+        return None
+    
+    if N % 2 == 0:
+        return 2, N // 2
+
+    n_count = 8
+    
+    for attempt in range(10):
+        a = randint(2, N - 1)
+        if a not in [2, 4, 7, 8, 11, 13]:
+            continue
+        
+        g = gcd(a, N)
+        if g != 1:
+            return g, N // g
+        
+        counts = quantum_period_finding(a, N, n_count)
+        
+        for output in counts:
+            decimal = int(output, 2)
+            phase = decimal / (2 ** n_count)
+            
+            if phase == 0:
+                continue
+            
+            frac = Fraction(phase).limit_denominator(N)
+            r = frac.denominator
+            
+            if r % 2 == 0 and pow(a, r, N) == 1:
+                x = pow(a, r // 2, N)
+                
+                if x == N - 1:
+                    continue
+                
+                p = gcd(x - 1, N)
+                q = gcd(x + 1, N)
+                
+                if p > 1 and q > 1 and p != N and q != N and p * q == N:
+                    return p, q
     
     return None
 
 
-# RSA SETUP
-print("\n================ RSA (CLASSICAL) ================")
-
-start_keygen = time.time()
-
-# HELLO = 310400273487 in numeric form
-p = 1000003  
-q = 1000033  
-n = p * q    
-phi = (p - 1) * (q - 1)
-e = 65537  
-while gcd(e, phi) != 1:
-    e += 2
-d = mod_inverse(e, phi)
-
-end_keygen = time.time()
-keygen_time = end_keygen - start_keygen
-
-message = "HELLO"
-m = text_to_num(message)
-
-# Verify message is smaller than modulus
-if m >= n:
-    print(f"Warning: Message value {m} is too large for modulus {n}")
-    message = "HI"
-    m = text_to_num(message)
-    print(f"Using shorter message: {message}")
-else:
-    print(f"Message '{message}' = {m} (fits in modulus {n})")
+# MAIN COMPARISON
+print("=" * 70)
+print(" PROPER COMPARISON: CLASSICAL VS QUANTUM RSA ATTACK")
+print("=" * 70)
+print("\nTHE CORRECT COMPARISON:")
+print("  ✓ Both algorithms attacking the SAME task: factoring N")
+print("  ✓ Both trying to break RSA encryption")
+print("  ✓ Using the SAME modulus N for fair comparison")
+print("\n" + "=" * 70)
 
 
-# RSA ENCRYPT 
-start_encrypt = time.time()
-cipher = pow(m, e, n)
-end_encrypt = time.time()
-encrypt_time = end_encrypt - start_encrypt
+# Test on multiple values of N
+test_values = [15, 21, 33, 35, 55, 77, 91, 143]
 
+results = []
 
-# RSA DECRYPT 
-start_decrypt = time.time()
-original = pow(cipher, d, n)
-decoded = num_to_text(original)
-end_decrypt = time.time()
-decrypt_time = end_decrypt - start_decrypt
+print("\n" + "=" * 70)
+print(" FACTORING RACE: CLASSICAL vs QUANTUM")
+print("=" * 70)
 
-print(f"Original message: {message}")
-print(f"Public Key (n, e): ({n}, {e})")
-print(f"Private Key d: {d}")
-print(f"Encrypted message: {cipher}")
-print(f"Decrypted message: {decoded}")
-
-def format_time(seconds):
-    """Format time in the most appropriate unit"""
-    if seconds == 0:
-        return "< 0.001 μs"
-    elif seconds < 1e-6:  
-        return f"{seconds*1e9:.3f} ns"
-    elif seconds < 1e-3:  
-        return f"{seconds*1e6:.3f} μs"
-    elif seconds < 1:  
-        return f"{seconds*1e3:.3f} ms"
+for N in test_values:
+    print(f"\n📊 Testing N = {N}")
+    print("-" * 50)
+    
+    # Trial Division (simplest classical)
+    start = time.perf_counter()
+    trial_result = trial_division(N)
+    trial_time = time.perf_counter() - start
+    
+    # Pollard's Rho (better classical)
+    start = time.perf_counter()
+    pollard_result = pollards_rho(N)
+    pollard_time = time.perf_counter() - start
+    
+    # Classical Shor method
+    start = time.perf_counter()
+    classical_shor_result = classical_shor_method(N)
+    classical_shor_time = time.perf_counter() - start
+    
+    # Quantum Shor (only works for N=15)
+    if N == 15:
+        start = time.perf_counter()
+        quantum_result = quantum_shor(N)
+        quantum_time = time.perf_counter() - start
+        
+        print(f"  Trial Division:     {trial_time*1000:.3f} ms  → {trial_result}")
+        print(f"  Pollard's Rho:      {pollard_time*1000:.3f} ms  → {pollard_result}")
+        print(f"  Classical Shor:     {classical_shor_time*1000:.3f} ms  → {classical_shor_result}")
+        print(f"  🔮 QUANTUM Shor:    {quantum_time*1000:.3f} ms  → {quantum_result}")
+        
+        if quantum_result:
+            print(f"\n  ⚡ Quantum speedup vs classical Shor: {classical_shor_time/quantum_time:.2f}x")
     else:
-        return f"{seconds:.3f} s"
-
-print(f"\nRSA Key generation time: {format_time(keygen_time)}")
-print(f"RSA Encryption time:     {format_time(encrypt_time)}")
-print(f"RSA Decryption time:     {format_time(decrypt_time)}")
-
-
-# SHOR ATTACK 
-print("\n============ SHOR'S ALGORITHM (ATTACK) ============")
-
-# Use a smaller n for the attack demo
-small_n = 15  
-start_shor = time.perf_counter()
-
-print(f"Attempting to factor n = {small_n}")
-factors = shor_classical_sim(small_n)
-
-if factors:
-    p_f, q_f = factors
-    print(f"✓ Shor found factors of n: {p_f} × {q_f} = {p_f * q_f}")
+        print(f"  Trial Division:     {trial_time*1000:.3f} ms  → {trial_result}")
+        print(f"  Pollard's Rho:      {pollard_time*1000:.3f} ms  → {pollard_result}")
+        print(f"  Classical Shor:     {classical_shor_time*1000:.3f} ms  → {classical_shor_result}")
+        print(f"  🔮 Quantum Shor:    N/A (only implemented for N=15)")
+        quantum_time = None
+        quantum_result = None
     
-    phi_f = (p_f - 1) * (q_f - 1)
-    
-    # Use a smaller e that works with small_n
-    e_small = 3
-    while gcd(e_small, phi_f) != 1:
-        e_small += 2
-    
-    hacked_d = mod_inverse(e_small, phi_f)
-    
-    # Encrypt a test message with small_n
-    test_msg_text = "A"
-    test_msg = text_to_num(test_msg_text)
-    
-    # Make sure message fits
-    if test_msg >= small_n:
-        test_msg = ord("A")  # Use ASCII value instead
-        test_msg_text = f"A (ASCII={test_msg})"
-    
-    test_cipher = pow(test_msg, e_small, small_n)
-    cracked_message = pow(test_cipher, hacked_d, small_n)
-    
-    print(f"✓ Recovered private key d: {hacked_d}")
-    print(f"✓ Test encryption: '{test_msg_text}' → {test_cipher}")
-    print(f"✓ Successfully decrypted: {test_cipher} → {cracked_message}")
-    print(f"✓ Attack successful! Attacker can now decrypt any message encrypted with n={small_n}")
-else:
-    print("✗ Shor attack failed.")
-
-end_shor = time.perf_counter()
-shor_time = end_shor - start_shor
-
-print(f"\nShor attack time: {format_time(shor_time)}")
+    results.append({
+        'N': N,
+        'trial_time': trial_time * 1000,
+        'pollard_time': pollard_time * 1000,
+        'classical_shor_time': classical_shor_time * 1000,
+        'quantum_time': quantum_time * 1000 if quantum_time else None
+    })
 
 
-# SUMMARY 
-print("\n================= FINAL COMPARISON =================")
+# THEORETICAL COMPLEXITY COMPARISON
+print("\n" + "=" * 70)
+print(" THEORETICAL COMPLEXITY ANALYSIS")
+print("=" * 70)
 
-total_rsa_time = keygen_time + encrypt_time + decrypt_time
-print(f"RSA Key Generation:      {format_time(keygen_time)}")
-print(f"RSA Encryption:          {format_time(encrypt_time)}")
-print(f"RSA Decryption:          {format_time(decrypt_time)}")
-print(f"RSA TOTAL TIME:          {format_time(total_rsa_time)}")
-print(f"\nShor factoring attack:   {format_time(shor_time)}")
+key_sizes = [512, 1024, 2048, 4096]
 
-if total_rsa_time > 0 and shor_time > 0:
-    if shor_time > total_rsa_time:
-        ratio = shor_time / total_rsa_time
-        print(f"\nSpeed comparison: Shor is {ratio:.1f}x SLOWER than RSA (classical simulation)")
-    else:
-        ratio = total_rsa_time / shor_time
-        print(f"\nSpeed comparison: RSA is {ratio:.1f}x slower than Shor (unexpected!)")
-else:
-    print("\nSpeed comparison: Times too small to compare accurately")
+print("\nEstimated time to factor RSA keys of different sizes:")
+print("-" * 70)
+print(f"{'Key Size':<12} {'Trial Division':<20} {'Best Classical':<20} {'Quantum Shor'}")
+print("-" * 70)
 
-print("\nConclusion:")
-print("• RSA is fast for encryption/decryption, but its security depends on hard factoring.")
-print("• Shor's algorithm successfully factored N and broke RSA.")
-print("• This demonstrates why quantum computers threaten classical encryption.")
-print("• NOTE: This is a classical simulation. Real quantum computers would be much faster.")
-
-
-# TIMING GRAPH
-print("\n================= GENERATING TIMING GRAPH =================")
-
-# Use a wider range of composite numbers for better visualization
-n_values = [15, 21, 33, 35, 55, 77, 91, 143, 187, 221, 323, 437]
-rsa_times = []
-shor_times = []
-successful_n = []
-
-for n_val in n_values:
-    print(f"Testing n = {n_val}...", end=" ")
+for bits in key_sizes:
+    # These are rough estimates based on complexity classes
+    # Trial Division: O(sqrt(N)) ≈ O(2^(n/2))
+    # Use log to avoid overflow: 2^(bits/2) = exp(bits/2 * ln(2))
+    trial_log = (bits / 2) * np.log(2) - np.log(1e15)
+    trial_est = np.exp(trial_log) if trial_log < 700 else float('inf')
     
-    # Get factors for RSA setup
-    result = shor_classical_sim(n_val)
-    if result is None:
-        print(f"Could not factor, skipping...")
-        continue
+    # General Number Field Sieve (best classical): O(exp((64/9)^(1/3) * (n*ln(2))^(1/3) * (ln(n*ln(2)))^(2/3)))
+    # Simplified to sub-exponential but super-polynomial
+    gnfs_exponent = 1.923 * (bits ** (1/3)) * ((np.log(bits)) ** (2/3)) - np.log(1e9)
+    gnfs_est = np.exp(gnfs_exponent) if gnfs_exponent < 700 else float('inf')
     
-    p_val, q_val = result
-    phi_val = (p_val - 1) * (q_val - 1)
-    e_val = 3
-    while gcd(e_val, phi_val) != 1:
-        e_val += 2
-    d_val = mod_inverse(e_val, phi_val)
-    m_val = 65  # ASCII 'A'
+    # Quantum Shor: O(n^3 * log(n))
+    quantum_est = (bits ** 3) * np.log(bits) / 1e9  # seconds
     
-    # Time RSA multiple times for better measurement
-    rsa_iterations = 10000  
-    start_rsa = time.time()
-    for _ in range(rsa_iterations):
-        c_val = pow(m_val, e_val, n_val)
-        o_val = pow(c_val, d_val, n_val)
-    end_rsa = time.time()
-    avg_rsa_time = (end_rsa - start_rsa) / rsa_iterations
-    
-    # Time Shor (just once as it's slower)
-    start_shor = time.time()
-    shor_classical_sim(n_val)
-    end_shor = time.time()
-    shor_time = end_shor - start_shor
-    
-    rsa_times.append(avg_rsa_time * 1000000)  
-    shor_times.append(shor_time * 1000)  
-    successful_n.append(n_val)
-    print(f"✓ RSA: {avg_rsa_time*1000000:.3f}μs, Shor: {shor_time*1000:.3f}ms")
-
-if len(rsa_times) > 0:
-    fig = plt.figure(figsize=(16, 10))
-    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
-    
-    # Plot 1: RSA Time Only (Top Left)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(successful_n, rsa_times, marker='o', linewidth=2, markersize=8, color='green', label='RSA')
-    ax1.fill_between(successful_n, rsa_times, alpha=0.3, color='green')
-    ax1.set_xlabel('RSA Modulus (n)', fontsize=11, fontweight='bold')
-    ax1.set_ylabel('Time (microseconds)', fontsize=11, fontweight='bold')
-    ax1.set_title('RSA Encryption + Decryption Time', fontsize=12, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend()
-    
-    # Plot 2: Shor Time Only (Top Right)
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.plot(successful_n, shor_times, marker='s', linewidth=2, markersize=8, color='red', label='Shor')
-    ax2.fill_between(successful_n, shor_times, alpha=0.3, color='red')
-    ax2.set_xlabel('RSA Modulus (n)', fontsize=11, fontweight='bold')
-    ax2.set_ylabel('Time (milliseconds)', fontsize=11, fontweight='bold')
-    ax2.set_title('Shor\'s Algorithm Attack Time', fontsize=12, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.legend()
-    
-    # Plot 3: Both on same graph with dual y-axis (Middle Left)
-    ax3 = fig.add_subplot(gs[1, 0])
-    ax3.plot(successful_n, rsa_times, marker='o', label='RSA Enc+Dec', linewidth=2, markersize=8, color='green')
-    ax3_twin = ax3.twinx()
-    ax3_twin.plot(successful_n, shor_times, marker='s', label='Shor Attack', linewidth=2, markersize=8, color='red')
-    ax3.set_xlabel('RSA Modulus (n)', fontsize=11, fontweight='bold')
-    ax3.set_ylabel('RSA Time (μs)', fontsize=10, color='green', fontweight='bold')
-    ax3_twin.set_ylabel('Shor Time (ms)', fontsize=10, color='red', fontweight='bold')
-    ax3.set_title('Direct Comparison (Dual Axis)', fontsize=12, fontweight='bold')
-    ax3.tick_params(axis='y', labelcolor='green')
-    ax3_twin.tick_params(axis='y', labelcolor='red')
-    ax3.grid(True, alpha=0.3)
-    ax3.legend(loc='upper left', fontsize=9)
-    ax3_twin.legend(loc='upper right', fontsize=9)
-    
-    # Plot 4: Performance Breakdown Bar Chart (Middle Right)
-    ax4 = fig.add_subplot(gs[1, 1])
-    x = np.arange(len(successful_n))
-    width = 0.35
-    bars1 = ax4.bar(x - width/2, rsa_times, width, label='RSA (μs)', color='green', alpha=0.7)
-    ax4_twin = ax4.twinx()
-    bars2 = ax4_twin.bar(x + width/2, shor_times, width, label='Shor (ms)', color='red', alpha=0.7)
-    ax4.set_xlabel('RSA Modulus (n)', fontsize=11, fontweight='bold')
-    ax4.set_ylabel('RSA Time (μs)', fontsize=10, color='green', fontweight='bold')
-    ax4_twin.set_ylabel('Shor Time (ms)', fontsize=10, color='red', fontweight='bold')
-    ax4.set_title('Side-by-Side Performance', fontsize=12, fontweight='bold')
-    ax4.set_xticks(x)
-    ax4.set_xticklabels([str(n) for n in successful_n], rotation=45, ha='right', fontsize=8)
-    ax4.tick_params(axis='y', labelcolor='green')
-    ax4_twin.tick_params(axis='y', labelcolor='red')
-    ax4.legend(loc='upper left', fontsize=9)
-    ax4_twin.legend(loc='upper right', fontsize=9)
-    ax4.grid(True, alpha=0.3, axis='y')
-    
-    # Plot 5: Ratio showing time difference (Bottom Span)
-    ax5 = fig.add_subplot(gs[2, :])
-    ratios = []
-    for i in range(len(rsa_times)):
-        if rsa_times[i] > 0:
-            ratios.append(shor_times[i] * 1000 / rsa_times[i])
+    def format_time(seconds):
+        if seconds < 60:
+            return f"{seconds:.2f} sec"
+        elif seconds < 3600:
+            return f"{seconds/60:.2f} min"
+        elif seconds < 86400:
+            return f"{seconds/3600:.2f} hours"
+        elif seconds < 31536000:
+            return f"{seconds/86400:.2f} days"
+        elif seconds < 31536000000:
+            return f"{seconds/31536000:.2e} years"
         else:
-            ratios.append(0)
+            return f"{seconds/31536000:.2e} years"
     
-    colors = ['purple' if r > 100 else 'orange' if r > 50 else 'yellow' for r in ratios]
-    bars = ax5.bar(range(len(successful_n)), ratios, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
-    ax5.set_xlabel('Test Cases', fontsize=11, fontweight='bold')
-    ax5.set_ylabel('Speed Ratio (Shor Time / RSA Time)', fontsize=11, fontweight='bold')
-    ax5.set_title('How Much Slower is Shor vs RSA? (Classical Simulation)', fontsize=12, fontweight='bold')
-    ax5.set_xticks(range(len(successful_n)))
-    ax5.set_xticklabels([f'n={n}' for n in successful_n], rotation=45, ha='right')
-    ax5.grid(True, alpha=0.3, axis='y')
-    ax5.axhline(y=1, color='red', linestyle='--', linewidth=2, label='Equal Performance')
-    
-    # Add value labels on bars
-    for i, (bar, ratio) in enumerate(zip(bars, ratios)):
-        height = bar.get_height()
-        ax5.text(bar.get_x() + bar.get_width()/2., height,
-                f'{int(ratio)}x',
-                ha='center', va='bottom', fontsize=9, fontweight='bold')
-    
-    ax5.legend(fontsize=10)
-    
-    plt.suptitle('RSA vs Shor\'s Algorithm: Comprehensive Performance Analysis', 
-                 fontsize=14, fontweight='bold', y=0.995)
-    plt.show()
-    
-    print(f"\n✓ Comprehensive graphs generated with {len(successful_n)} data points!")
-    print("\nKey Insights:")
-    print(f"  • RSA Time Range: {min(rsa_times):.3f}-{max(rsa_times):.3f} μs (microseconds)")
-    print(f"  • RSA Average Time: {np.mean(rsa_times):.3f} μs")
-    print(f"  • Shor Time Range: {min(shor_times):.3f}-{max(shor_times):.3f} ms (milliseconds)")
-    print(f"  • Shor Average Time: {np.mean(shor_times):.3f} ms")
-    valid_ratios = [r for r in ratios if r > 0]
-    if valid_ratios:
-        print(f"  • Classical Shor is ~{int(np.mean(valid_ratios))}x slower than RSA on average")
-    print(f"  • IMPORTANT: Real quantum Shor would be exponentially faster for large keys!")
-    print(f"  • This demonstrates the quantum threat to current RSA encryption.")
-else:
-    print("✗ Not enough data points to generate graph.")
+    print(f"{bits}-bit{'':<6} {format_time(trial_est):<20} {format_time(gnfs_est):<20} {format_time(quantum_est)}")
+
+print("-" * 70)
+
+
+# VISUALIZATION
+print("\n" + "=" * 70)
+print(" GENERATING VISUALIZATIONS")
+print("=" * 70)
+
+fig = plt.figure(figsize=(16, 12))
+gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+
+# Plot 1: Actual measured times for small N
+ax1 = fig.add_subplot(gs[0, :])
+n_values = [r['N'] for r in results]
+trial_times = [r['trial_time'] for r in results]
+pollard_times = [r['pollard_time'] for r in results]
+classical_shor_times = [r['classical_shor_time'] for r in results]
+
+ax1.plot(n_values, trial_times, 'o-', label='Trial Division', linewidth=2, markersize=8, color='red')
+ax1.plot(n_values, pollard_times, 's-', label="Pollard's Rho", linewidth=2, markersize=8, color='orange')
+ax1.plot(n_values, classical_shor_times, '^-', label='Classical Shor Method', linewidth=2, markersize=8, color='blue')
+
+# Add quantum point for N=15
+quantum_point = next((r for r in results if r['N'] == 15 and r['quantum_time']), None)
+if quantum_point:
+    ax1.plot([15], [quantum_point['quantum_time']], 'D', label='Quantum Shor (N=15)', 
+             markersize=15, color='green', markeredgecolor='black', markeredgewidth=2)
+
+ax1.set_xlabel('N (number to factor)', fontsize=12, fontweight='bold')
+ax1.set_ylabel('Time (milliseconds)', fontsize=12, fontweight='bold')
+ax1.set_title('ACTUAL MEASURED TIMES: Classical vs Quantum Factoring\n(Same Task, Same Numbers)', 
+              fontsize=13, fontweight='bold')
+ax1.legend(fontsize=10)
+ax1.grid(True, alpha=0.3)
+ax1.set_yscale('log')
+
+# Plot 2: Theoretical complexity for large keys
+ax2 = fig.add_subplot(gs[1, 0])
+key_bits = np.array([256, 512, 768, 1024, 1536, 2048, 3072, 4096])
+
+# Calculate theoretical times (normalized)
+classical_times = np.exp(1.923 * (key_bits ** (1/3)) * ((np.log(key_bits)) ** (2/3)))
+quantum_times = (key_bits ** 3) * np.log(key_bits)
+
+# Normalize to make comparison visible
+classical_times = classical_times / classical_times[0]
+quantum_times = quantum_times / quantum_times[0]
+
+ax2.plot(key_bits, classical_times, 'o-', label='Best Classical (GNFS)', 
+         linewidth=3, markersize=8, color='red')
+ax2.plot(key_bits, quantum_times, 's-', label='Quantum Shor', 
+         linewidth=3, markersize=8, color='green')
+ax2.set_xlabel('RSA Key Size (bits)', fontsize=11, fontweight='bold')
+ax2.set_ylabel('Relative Time (normalized)', fontsize=11, fontweight='bold')
+ax2.set_title('Theoretical Complexity Growth\n(Exponential vs Polynomial)', 
+              fontsize=12, fontweight='bold')
+ax2.legend(fontsize=10)
+ax2.grid(True, alpha=0.3)
+ax2.set_yscale('log')
+
+# Plot 3: Speedup ratio
+ax3 = fig.add_subplot(gs[1, 1])
+speedup_ratio = classical_times / quantum_times
+ax3.plot(key_bits, speedup_ratio, 'o-', linewidth=3, markersize=10, color='purple')
+ax3.fill_between(key_bits, speedup_ratio, alpha=0.3, color='purple')
+ax3.set_xlabel('RSA Key Size (bits)', fontsize=11, fontweight='bold')
+ax3.set_ylabel('Speedup Factor (Classical / Quantum)', fontsize=11, fontweight='bold')
+ax3.set_title('Quantum Advantage Growth\n(Why RSA is Doomed)', 
+              fontsize=12, fontweight='bold')
+ax3.grid(True, alpha=0.3)
+ax3.set_yscale('log')
+
+for i, (bits, speedup) in enumerate(zip(key_bits, speedup_ratio)):
+    if i % 2 == 0:  # Label every other point
+        ax3.annotate(f'{speedup:.0e}x', 
+                    xy=(bits, speedup), 
+                    xytext=(5, 5), 
+                    textcoords='offset points',
+                    fontsize=8,
+                    fontweight='bold')
+
+# Plot 4: Attack comparison summary
+ax4 = fig.add_subplot(gs[2, :])
+ax4.axis('off')
+
+summary_text = """
+"""
+
+ax4.text(0.05, 0.95, summary_text, 
+         transform=ax4.transAxes,
+         fontsize=10,
+         verticalalignment='top',
+         fontfamily='monospace',
+         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+plt.suptitle('PROPER COMPARISON: Classical vs Quantum RSA Attack\n(Why Quantum Computers Threaten Modern Encryption)', 
+             fontsize=15, fontweight='bold', y=0.995)
+
+plt.show()
